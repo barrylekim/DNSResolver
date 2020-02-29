@@ -6,12 +6,14 @@ import java.net.InetAddress;
 import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.util.*;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.io.DataOutputStream;
 
 public class DNSLookupService {
 
     private static final int DEFAULT_DNS_PORT = 53;
     private static final int MAX_INDIRECTION_LEVEL = 10;
-
     private static InetAddress rootServer;
     private static boolean verboseTracing = false;
     private static DatagramSocket socket;
@@ -174,8 +176,8 @@ public class DNSLookupService {
             System.err.println("Maximum number of indirection levels reached.");
             return Collections.emptySet();
         }
-
         // TODO To be completed by the student
+
 
         return cache.getCachedResults(node);
     }
@@ -189,8 +191,13 @@ public class DNSLookupService {
      * @param server Address of the server to be used for the query.
      */
     private static void retrieveResultsFromServer(DNSNode node, InetAddress server) {
+        byte[] query = createQuery(node);
+        DatagramPacket toSend = new DatagramPacket(query, 1000, rootServer);
 
-        // TODO To be completed by the student
+        socket.send(toSend);
+
+        DatagramPacket received = new DatagramPacket(new byte[512], 512);
+        socket.receive(received);
     }
 
     private static void verbosePrintResourceRecord(ResourceRecord record, int rtype) {
@@ -215,5 +222,55 @@ public class DNSLookupService {
             System.out.printf("%-30s %-5s %-8d %s\n", node.getHostName(),
                     node.getType(), record.getTTL(), record.getTextResult());
         }
+    }
+
+    /**
+     * Creates a random ID for a DNS query
+     * 
+     * @return int of the ID generated.
+     */
+    private static int randomIDGenerator(){
+        int id = Random.nextInt(65536);
+
+        return id;
+    }
+
+    private static byte[] createQuery(DNSNode node){
+        byte[] query = new byte[512];
+        int id = randomIDGenerator();
+
+        int firstHalfID = id >>> 8;
+        int secondHalfID = id & 0xff;
+
+        //Unique ID 
+        query[0] = (byte) firstHalfID;
+        query[1] = (byte) secondHalfID;
+
+        // Configure QR, Opcode, AA, TC, RD, RA, Z, RCODE
+        query[2] = (byte) 0;
+        query[3] = (byte) 0;
+        // Set QDCOUNT
+        quert[4] = (byte) 0;
+        query[5] = (byte) 1;
+        // Set ADCOUNT
+        query[6] = (byte) 0;
+        query[7] = (byte) 0;
+        //Set NSCOUNT
+        query[8] = (byte) 0;
+        query[9] = (byte) 0;
+        //SET ARCOUNT 
+        query[10] = (byte) 0;
+        query[11] = (byte) 0;
+
+        // QNAME
+        byte[] hostName = node.getHostName.getBytes();
+        query.write(hostName, 0, hostName.length);
+        query.writeByte(0x00);
+        // QTYPE 
+        query.writeShort(0x0001);
+        // QCLASS
+        query.writeShort(0x0001);
+
+        return query;
     }
 }
