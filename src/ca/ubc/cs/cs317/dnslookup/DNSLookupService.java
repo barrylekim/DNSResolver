@@ -179,6 +179,23 @@ public class DNSLookupService {
         }
         // TODO To be completed by the student
 
+        byte[] query = createQuery(node);
+        System.out.println(query);
+        DatagramPacket toSend = new DatagramPacket(query, query.length, rootServer, DEFAULT_DNS_PORT);
+        try{
+            socket.send(toSend);
+            System.out.println("Sent");
+        } catch (Exception e){
+            System.out.println("Error");
+        }
+        // byte[] response =  new byte[512];
+        // DatagramPacket received = new DatagramPacket(response, response.length);
+        // try{
+        //     socket.receive(received);
+        // } catch (Exception e) {
+        //     System.out.println("Error");
+        // }
+
 
         return cache.getCachedResults(node);
     }
@@ -192,20 +209,20 @@ public class DNSLookupService {
      * @param server Address of the server to be used for the query.
      */
     private static void retrieveResultsFromServer(DNSNode node, InetAddress server) {
-        byte[] query = createQuery(node);
-        DatagramPacket toSend = new DatagramPacket(query, query.length, rootServer, DEFAULT_DNS_PORT);
-        try{
-            socket.send(toSend);
-        } catch (Exception e){
-            System.out.println("Error");
-        }
-        byte[] response =  new byte[512];
-        DatagramPacket received = new DatagramPacket(response, response.length);
-        try{
-            socket.receive(received);
-        } catch (Exception e) {
-            System.out.println("Error");
-        }
+        // byte[] query = createQuery(node);
+        // DatagramPacket toSend = new DatagramPacket(query, query.length, rootServer, DEFAULT_DNS_PORT);
+        // try{
+        //     socket.send(toSend);
+        // } catch (Exception e){
+        //     System.out.println("Error");
+        // }
+        // byte[] response =  new byte[512];
+        // DatagramPacket received = new DatagramPacket(response, response.length);
+        // try{
+        //     socket.receive(received);
+        // } catch (Exception e) {
+        //     System.out.println("Error");
+        // }
 
     }
 
@@ -238,19 +255,19 @@ public class DNSLookupService {
      * 
      * @return int of the ID generated.
      */
-    private static int randomIDGenerator(){
+    private static int randomIDGenerator() {
         return new Random().nextInt(1 + Short.MAX_VALUE - Short.MIN_VALUE);
     }
 
-    private static byte[] createQuery(DNSNode node){
+    private static byte[] createQuery(DNSNode node) {
         byte[] query = new byte[512];
         int id = randomIDGenerator();
+        System.out.println(id);
 
         // Shift 8 Bits to the left to get first 8 bits
         int firstHalfID = id >>> 8;
         // Get Last 8 bytes
         int secondHalfID = id & 0xff;
-
         //Unique ID 
         query[0] = (byte) firstHalfID;
         query[1] = (byte) secondHalfID;
@@ -271,21 +288,42 @@ public class DNSLookupService {
         query[10] = (byte) 0;
         query[11] = (byte) 0;
 
+        int index = 12;
         // QNAME
-        byte[] hostName = node.getHostName().getBytes();
+        String hostName = node.getHostName();
+        String[] hostNameSplit = hostName.split("\\.");
+        System.out.println(hostNameSplit.length);
         
-        for (int i = 0; i < hostName.length; i++){
-            query[12+i] = hostName[i];
+        for (String s: hostNameSplit){
+            int length = s.length();
+            System.out.println("Length " + length);
+            query[index] = (byte) length;
+            index++;
+            char[] characters = s.toCharArray();
+            for (char c: characters){
+                System.out.println("Characters " + c);
+                System.out.println((byte) c);
+                query[index] = (byte) c;
+                System.out.println(index);
+                index++;
+            }
         }
-        int j = 12 + hostName.length;
-        query[j] = (byte) 0;
-        query[j+1] = (byte) 0;
+        System.out.println(node.getHostName());
+        
+        query[index] = (byte) 0;
+        index++;
+    
         // QTYPE 
-        query[j+2] = (byte) 0;
-        query[j+3] = (byte) 1;
+        int qType = node.getType().getCode();
+        query[index] = (byte) ((qType >>> 8) & 0xff);
+        index++;
+        query[index] = (byte) (qType & 0xff);
+        index++;
         // QCLASS
-        query[j+4] = (byte) 0;
-        query[j+5] = (byte) 1;
+        query[index] = (byte) 0;
+        index++;
+        query[index] = (byte) 1;
+        index++;
 
         return query;
     }
