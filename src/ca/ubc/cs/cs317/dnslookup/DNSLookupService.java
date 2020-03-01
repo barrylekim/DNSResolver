@@ -1,6 +1,7 @@
 package ca.ubc.cs.cs317.dnslookup;
 
 import java.io.Console;
+import java.util.Arrays;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
@@ -192,12 +193,20 @@ public class DNSLookupService {
      */
     private static void retrieveResultsFromServer(DNSNode node, InetAddress server) {
         byte[] query = createQuery(node);
-        DatagramPacket toSend = new DatagramPacket(query, 1000, rootServer);
+        DatagramPacket toSend = new DatagramPacket(query, query.length, rootServer, DEFAULT_DNS_PORT);
+        try{
+            socket.send(toSend);
+        } catch (Exception e){
+            System.out.println("Error");
+        }
+        byte[] response =  new byte[512];
+        DatagramPacket received = new DatagramPacket(response, response.length);
+        try{
+            socket.receive(received);
+        } catch (Exception e) {
+            System.out.println("Error");
+        }
 
-        socket.send(toSend);
-
-        DatagramPacket received = new DatagramPacket(new byte[512], 512);
-        socket.receive(received);
     }
 
     private static void verbosePrintResourceRecord(ResourceRecord record, int rtype) {
@@ -230,16 +239,16 @@ public class DNSLookupService {
      * @return int of the ID generated.
      */
     private static int randomIDGenerator(){
-        int id = Random.nextInt(65536);
-
-        return id;
+        return new Random().nextInt(1 + Short.MAX_VALUE - Short.MIN_VALUE);
     }
 
     private static byte[] createQuery(DNSNode node){
         byte[] query = new byte[512];
         int id = randomIDGenerator();
 
+        // Shift 8 Bits to the left to get first 8 bits
         int firstHalfID = id >>> 8;
+        // Get Last 8 bytes
         int secondHalfID = id & 0xff;
 
         //Unique ID 
@@ -250,7 +259,7 @@ public class DNSLookupService {
         query[2] = (byte) 0;
         query[3] = (byte) 0;
         // Set QDCOUNT
-        quert[4] = (byte) 0;
+        query[4] = (byte) 0;
         query[5] = (byte) 1;
         // Set ADCOUNT
         query[6] = (byte) 0;
@@ -263,13 +272,20 @@ public class DNSLookupService {
         query[11] = (byte) 0;
 
         // QNAME
-        byte[] hostName = node.getHostName.getBytes();
-        query.write(hostName, 0, hostName.length);
-        query.writeByte(0x00);
+        byte[] hostName = node.getHostName().getBytes();
+        
+        for (int i = 0; i < hostName.length; i++){
+            query[12+i] = hostName[i];
+        }
+        int j = 12 + hostName.length;
+        query[j] = (byte) 0;
+        query[j+1] = (byte) 0;
         // QTYPE 
-        query.writeShort(0x0001);
+        query[j+2] = (byte) 0;
+        query[j+3] = (byte) 1;
         // QCLASS
-        query.writeShort(0x0001);
+        query[j+4] = (byte) 0;
+        query[j+5] = (byte) 1;
 
         return query;
     }
