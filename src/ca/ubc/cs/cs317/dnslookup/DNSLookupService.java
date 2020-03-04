@@ -161,7 +161,7 @@ public class DNSLookupService {
      */
     private static void findAndPrintResults(String hostName, RecordType type) {
         DNSNode node = new DNSNode(hostName, type);
-        printResults(node, getResults(node, 0));
+        printResults(node, getResults(node, -1));
     }
 
     /**
@@ -179,31 +179,43 @@ public class DNSLookupService {
      *         requested.
      */
     private static Set<ResourceRecord> getResults(DNSNode node, int indirectionLevel) {
-        if (indirectionLevel == 0){
+        if (indirectionLevel == -1){
             inetAddressStack.push(rootServer);
+            indirectionLevel = 0;
         }
-
         if (indirectionLevel > MAX_INDIRECTION_LEVEL) {
             System.err.println("Maximum number of indirection levels reached.");
             return Collections.emptySet();
         }
 
-        System.out.println(indirectionLevel);
-        // TODO To be completed by the student
-        System.out.println(inetAddressStack.peek());
+        System.out.println("Indirection level :" + indirectionLevel);
+
+        // System.out.println("Top of stack is: "+inetAddressStack.peek());
         Set<ResourceRecord> cachedResult = cache.getCachedResults(node);
-        if (cachedResult.isEmpty()){
+        if (cachedResult.isEmpty()) {
+            
+            // Check Cache for CNAME
+            DNSNode cNameNode = new DNSNode(node.getHostName(), RecordType.getByCode(5));
+            Set<ResourceRecord> cNameCachedResult = cache.getCachedResults(cNameNode);
+
+            if (!cNameCachedResult.isEmpty()){
+                retrieveResultsFromServer(cNameNode, rootServer);
+                getResults(node, indirectionLevel + 1);
+            }
+
+            if (!inetAddressStack.isEmpty()) {
             retrieveResultsFromServer(node, inetAddressStack.pop());
-            getResults(node, indirectionLevel+1);
+            getResults(node, indirectionLevel);
+            }
         }
 
         return cache.getCachedResults(node);
     }
 
     // private static void getResultsHelper(DNSNode node, int indirectionLevel){
-        
-    //     retrieveResultsFromServer(node, stack.push());
-    //     getResults(node, indirectionLevel++);
+
+    // retrieveResultsFromServer(node, stack.push());
+    // getResults(node, indirectionLevel++);
     // }
 
     /**
@@ -231,26 +243,21 @@ public class DNSLookupService {
         DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
         try {
             socket.receive(responsePacket);
+            try {
+                ArrayList<ResourceRecord> additionalRecords = decodeResponse(responseBuffer, node);
+                for (ResourceRecord a : additionalRecords) {
+                    if (a.getNode().getType() == node.getType()) {
+                        inetAddressStack.push(a.getInetResult());
+                        break;
+                    }
+                }
+            } catch (Exception e){
+                System.out.println(e);
+                return;
+            }
         } catch (IOException e) {
             System.out.println(e);
         }
-
-        // for (byte b : responseBuffer) {
-        // String st = String.format("%02X", b);
-        // System.out.print(st + " ");
-        // }
-        ArrayList<ResourceRecord> additionalRecords = decodeResponse(responseBuffer);
-        ResourceRecord recordToUse = null;
-        
-        for(ResourceRecord a: additionalRecords){
-            if (a.getNode().getType() == node.getType()){
-                recordToUse = a;
-                inetAddressStack.push(a.getInetResult());
-                break;
-            }
-        }
-
-        // System.out.println(additionalRecords.size());
     }
 
     private static int getIntFromByteArray(byte[] b) {
@@ -261,7 +268,9 @@ public class DNSLookupService {
         }
     }
 
-    private static ArrayList<ResourceRecord> decodeResponse(byte[] responseBuffer) {
+    private static ArrayList<ResourceRecord> decodeResponse(byte[] responseBuffer, DNSNode node) throws Exception {
+        ArrayList<ResourceRecord> results = new ArrayList<ResourceRecord>();
+
         int responseID = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, 0, 2));
         int QR = (responseBuffer[2] & 0x80) >>> 7;
         int opCode = (responseBuffer[2] & 0x78) >>> 3;
@@ -280,68 +289,106 @@ public class DNSLookupService {
         String hostName = "";
         int ptr = 12;
 
-        while (responseBuffer[ptr] != 0) {
-            int partlength = responseBuffer[ptr];
-            int ptr2 = ptr + 1;
-            for (int i = 0; i < partlength; i++) {
-                char letter = (char) responseBuffer[ptr2];
-                hostName = hostName + letter;
-                ptr2++;
-            }
-            hostName = hostName + ".";
-            ptr = ptr + partlength + 1;
-        }
-
-        hostName = hostName.substring(0, hostName.length() - 1); // Get rid of the redundant "." at the end
-        // System.out.println("Printing the hostName from response packet: " + hostName);
-
-        ptr++;
-        int QTYPE = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, ptr, ptr += 2));
-        int QCLASS = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, ptr, ptr += 2));
-        // System.out.println(QTYPE);
-        // System.out.println(QCLASS);
-
-        // Need to decode Answer if there is one
-
-
-        // Pointer now pointing at first nameserver
-        ArrayList<ResourceRecord> listOfNameServers = new ArrayList<ResourceRecord>();
-        // Name server
-        for (int i = 0; i < NSCOUNT; i++) {
-            // System.out.println("Name Server number: " + (i + 1));
-            HashMap<String, Object> temp = decodeRecord(responseBuffer, ptr);
-            ResourceRecord record = (ResourceRecord) temp.get("record");
-            ptr = (int) temp.get("ptr");
-            listOfNameServers.add(record);
-        }
-        // System.out.println("List of NameServers " + listOfNameServers.size());
-
-        ArrayList<ResourceRecord> listOfAdditionalRecords = new ArrayList<ResourceRecord>();
-        // Additional records
-        for (int i = 0; i < ARCOUNT; i++) {
-            // System.out.println("Additional record number: " + (i + 1));
-            HashMap<String, Object> temp = decodeRecord(responseBuffer, ptr);
-            ResourceRecord record = (ResourceRecord) temp.get("record");
-            ptr = (int) temp.get("ptr");
-            listOfAdditionalRecords.add(record);
-        }
-
-        // System.out.println("listOfAdditionalRecords " + listOfAdditionalRecords.size());
-
-        ArrayList<ResourceRecord> resourceRecords = new ArrayList<ResourceRecord>();
-        
-        // Match the sames servers with additional records
-        for (ResourceRecord r: listOfNameServers){
-            String nameServer = r.getTextResult().trim();
-            for (ResourceRecord a: listOfAdditionalRecords){
-                if (nameServer.equals(a.getHostName().trim())){
-                    // System.out.println("IN HERE");
-                    resourceRecords.add(a);
+        switch (RCODE) {
+            case 1:
+                throw new Exception("Format error - The name server was unable to interpret the query");
+            case 2:
+                throw new Exception("Server failure - The name server was unable to process this query due to a problem with the name server");
+            
+            case 3:
+                throw new Exception("Name Error - Meaningful only for responses from an authoritative name server, this code signifies that the domain name referenced in the query does not exist");
+                
+            case 4:
+                throw new Exception("Not Implemented -The name server does not support the requested kind of query");
+                
+            case 5:
+                throw new Exception("Refused - The name server refuses to perform the specified operation for policy reasons");
+            case 0:
+                while (responseBuffer[ptr] != 0) {
+                    int partlength = responseBuffer[ptr];
+                    int ptr2 = ptr + 1;
+                    for (int i = 0; i < partlength; i++) {
+                        char letter = (char) responseBuffer[ptr2];
+                        hostName = hostName + letter;
+                        ptr2++;
+                    }
+                    hostName = hostName + ".";
+                    ptr = ptr + partlength + 1;
                 }
-            }
-        }
 
-        return resourceRecords;
+                hostName = hostName.substring(0, hostName.length() - 1); // Get rid of the redundant "." at the end
+
+
+                ptr++;
+                int QTYPE = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, ptr, ptr += 2));
+                int QCLASS = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, ptr, ptr += 2));
+
+                // Need to decode Answer if there is one
+                if (AA == 1) {
+                    results = new ArrayList<ResourceRecord>();
+                    for (int i = 0; i < ANCOUNT; i++) {
+                        HashMap<String, Object> temp = decodeRecord(responseBuffer, ptr);
+                        ResourceRecord record = (ResourceRecord) temp.get("record");
+                        ptr = (int) temp.get("ptr");
+                        results.add(record);
+                        cache.addResult(record);
+                        // if(record.getType() == RecordType.getByCode(5)){
+                        //     DNSNode cNameNode = new DNSNode(record.getHostName(), node.getType());
+                        //     Set<ResourceRecord> cnameset = getResults(cNameNode, 0);
+                        //     results.addAll(cnameset);
+                        // }
+                    }
+                    System.out.println("Entered AA==1");
+                    
+                    return results;
+                }
+
+                // Pointer now pointing at first nameserver
+                ArrayList<ResourceRecord> listOfNameServers = new ArrayList<ResourceRecord>();
+                // Name server
+                for (int i = 0; i < NSCOUNT; i++) {
+                    HashMap<String, Object> temp = decodeRecord(responseBuffer, ptr);
+                    ResourceRecord record = (ResourceRecord) temp.get("record");
+                    ptr = (int) temp.get("ptr");
+                    listOfNameServers.add(record);
+                }
+
+                ArrayList<ResourceRecord> listOfAdditionalRecords = new ArrayList<ResourceRecord>();
+                // Additional records
+                for (int i = 0; i < ARCOUNT; i++) {
+                    HashMap<String, Object> temp = decodeRecord(responseBuffer, ptr);
+                    ResourceRecord record = (ResourceRecord) temp.get("record");
+                    ptr = (int) temp.get("ptr");
+                    listOfAdditionalRecords.add(record);
+                    cache.addResult(record);
+                }
+
+
+                ArrayList<ResourceRecord> resourceRecords = new ArrayList<ResourceRecord>();
+
+                // Match the sames servers with additional records
+                for (ResourceRecord r : listOfNameServers) {
+                    String nameServer = r.getTextResult().trim();
+                    for (ResourceRecord a : listOfAdditionalRecords) {
+                        if (nameServer.equals(a.getHostName().trim())) {
+                            resourceRecords.add(a);
+                        }
+                    }
+                }
+
+                if (resourceRecords.isEmpty() && !listOfNameServers.isEmpty()){
+                    ResourceRecord firstRecord = listOfNameServers.get(0);
+                    DNSNode sideNode = new DNSNode(firstRecord.getHostName(), RecordType.getByCode(1));
+                    Set<ResourceRecord> sideNodeResourceRecords = getResults(sideNode, -1);
+                    for(ResourceRecord r: sideNodeResourceRecords) {
+                        resourceRecords.add(r);
+                    }
+                }
+
+                    return resourceRecords;
+                }
+
+                return new ArrayList<ResourceRecord>();
     }
 
     private static HashMap<String, Object> decodeRecord(byte[] responseBuffer, int ptr) {
@@ -350,18 +397,13 @@ public class DNSLookupService {
         HashMap<String, Object> temp = getName(responseBuffer, ptr);
         String hostName = (String) temp.get("name");
         hostName = hostName.substring(0, hostName.length() - 1); // Get rid of the redundant "." at the end
-        // System.out.println(hostName);
+
         ptr = (int) temp.get("ptr");
         int typeCode = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, ptr, ptr += 2));
         int classCode = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, ptr, ptr += 2));
         long TTL = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, ptr, ptr += 4));
         int RDATALength = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, ptr, ptr += 2));
 
-
-        // System.out.println(typeCode);
-        // System.out.println(classCode);
-        // System.out.println(TTL);
-        // System.out.println(RDATALength);
         if (typeCode == 1) { // Type A, Host address, ipv4
             String ipv4 = "";
             for (int i = 0; i < RDATALength; i++) {
@@ -385,7 +427,6 @@ public class DNSLookupService {
                 ipv6 = ipv6 + hex + ":";
             }
             ipv6 = ipv6.substring(0, ipv6.length() - 1); // Get rid of the redundant "." at the end
-            // System.out.println(ipv6);
             try {
                 InetAddress recordip = null;
                 recordip = InetAddress.getByName(ipv6);
@@ -393,11 +434,10 @@ public class DNSLookupService {
             } catch (UnknownHostException e) {
                 System.out.println("Error occured while InetAddress.getByName(ipv4)");
             }
-        } else { // Authoritative nameservers
+        } else { // Authoritative nameservers and everything else
             HashMap<String, Object> nameAndPointer = getName(responseBuffer, ptr);
             String data = (String) nameAndPointer.get("name");
             data = data.substring(0, data.length() - 1); // Get rid of the redundant "." at the end
-            // System.out.println("Authoritative nameservers: " + data + "\n");
             ptr = (int) nameAndPointer.get("ptr");
             singleRecord = new ResourceRecord(hostName, RecordType.getByCode(typeCode), TTL, data);
         }
@@ -413,7 +453,6 @@ public class DNSLookupService {
         int partlength = responseBuffer[ptr] & 0xFF;
         int compressioncode = responseBuffer[ptr] & 0xFF;
         int tempptr = ptr;
-        // System.out.println("POINTER AT THE BEGINNING OF GET NAME " + ptr);
         // Get the new pointer pointing to the correct offset stated by the compression
         // bits
         while (partlength >= 192) {
@@ -424,16 +463,12 @@ public class DNSLookupService {
 
         while (responseBuffer[tempptr] != 0) {
             int labellength = responseBuffer[tempptr] & 0xFF;
-            // System.out.println("Pointer when reading normally is at " + tempptr);
-            // System.out.println("Length of each label " + labellength);
             if (labellength >= 192) {
-                // System.out.println("Pointer before hitting compression: " + tempptr);
                 int newptr = 0;
                 while (labellength >= 192) {
                     newptr = ((labellength - 192) << 8) + responseBuffer[tempptr + 1] & 0xFF;
                     labellength = responseBuffer[newptr];
                 }
-                // System.out.println("new pointer is now at: " + newptr);
                 name = name + getNameHelper(responseBuffer, newptr);
                 // packet compression is 2 bytes but tempptr is incremented once more below so
                 // we only add one
@@ -462,12 +497,12 @@ public class DNSLookupService {
         return result;
     }
 
-private static String getNameHelper(byte[] responseBuffer, int ptr) {
+    private static String getNameHelper(byte[] responseBuffer, int ptr) {
         String hostName = "";
         while (responseBuffer[ptr] != 0) {
             int partlength = responseBuffer[ptr] & 0xFF;
-            if (partlength>= 192){
-                int newptr = ((partlength - 192) << 8) + responseBuffer[ptr+1] & 0xFF;
+            if (partlength >= 192) {
+                int newptr = ((partlength - 192) << 8) + responseBuffer[ptr + 1] & 0xFF;
                 hostName = hostName + getNameHelper(responseBuffer, newptr);
                 break;
             }
@@ -480,7 +515,6 @@ private static String getNameHelper(byte[] responseBuffer, int ptr) {
             hostName = hostName + ".";
             ptr = ptr + partlength + 1;
         }
-        // System.out.println("getNameHelper returns " + hostName);
 
         return hostName;
     }
@@ -506,17 +540,17 @@ private static String getNameHelper(byte[] responseBuffer, int ptr) {
         }
     }
 
-        /**
+    /**
      * Creates a random ID for a DNS query
      * 
      * @return int of the ID generated.
      */
     private static int randomIDGenerator() {
         int id = new Random().nextInt(1 + Short.MAX_VALUE - Short.MIN_VALUE);
-        if (!queryIDArray.contains(id)){
+        if (!queryIDArray.contains(id)) {
             queryIDArray.add(id);
             return id;
-        } 
+        }
         randomIDGenerator();
         return -1;
     }
@@ -524,7 +558,6 @@ private static String getNameHelper(byte[] responseBuffer, int ptr) {
     private static byte[] createQuery(DNSNode node) {
         byte[] query = new byte[512];
         int id = randomIDGenerator();
-        System.out.println(id);
 
         // Shift 8 Bits to the left to get first 8 bits
         int firstHalfID = id >>> 8;
@@ -557,17 +590,14 @@ private static String getNameHelper(byte[] responseBuffer, int ptr) {
 
         for (String s : hostNameSplit) {
             int length = s.length();
-            // System.out.println("Length " + length);
             query[index] = (byte) length;
             index++;
             char[] characters = s.toCharArray();
             for (char c : characters) {
                 query[index] = (byte) c;
-                System.out.println((byte) c);
                 index++;
             }
         }
-        // System.out.println(node.getHostName());
 
         query[index] = (byte) 0;
         index++;
@@ -584,6 +614,6 @@ private static String getNameHelper(byte[] responseBuffer, int ptr) {
         query[index] = (byte) 1;
         index++;
 
-        return Arrays.copyOfRange(query,0,index);
+        return Arrays.copyOfRange(query, 0, index);
     }
 }
