@@ -25,6 +25,7 @@ public class DNSLookupService {
     private static Set<Integer> queryIDArray = new HashSet<>();
     private static Stack<InetAddress> inetAddressStack = new Stack<InetAddress>();
     private static Random random = new Random();
+    private static Boolean error = false;
 
     /**
      * Main function, called when program is first invoked.
@@ -180,6 +181,7 @@ public class DNSLookupService {
      */
     private static Set<ResourceRecord> getResults(DNSNode node, int indirectionLevel) {
         if (indirectionLevel == -1){
+            error = false;
             inetAddressStack.push(rootServer);
             indirectionLevel = 0;
         }
@@ -188,35 +190,38 @@ public class DNSLookupService {
             return Collections.emptySet();
         }
 
-        System.out.println("Indirection level :" + indirectionLevel);
+        // Assume the node is CNAME first
+        Set<ResourceRecord> allResults = new HashSet<ResourceRecord>();
+        DNSNode cnameNode = new DNSNode(node.getHostName(), RecordType.getByCode(5));
+        Set<ResourceRecord> cachedCNAMErecord = cache.getCachedResults(cnameNode);
+
+        if (!cachedCNAMErecord.isEmpty()){
+            for (ResourceRecord cnameRecord : cachedCNAMErecord){
+                DNSNode newNode = new DNSNode(cnameRecord.getTextResult(), node.getType());
+                inetAddressStack.push(rootServer);
+                allResults.addAll(getResults(newNode, indirectionLevel + 1));
+            };
+            for (ResourceRecord i: allResults){
+                ResourceRecord tempResultRecord = new ResourceRecord(node.getHostName(), node.getType(), i.getTTL(), i.getInetResult());
+                cache.addResult(tempResultRecord);
+            }
+            return cache.getCachedResults(node);
+        }
+
 
         // System.out.println("Top of stack is: "+inetAddressStack.peek());
         Set<ResourceRecord> cachedResult = cache.getCachedResults(node);
+
         if (cachedResult.isEmpty()) {
-            
-            // Check Cache for CNAME
-            DNSNode cNameNode = new DNSNode(node.getHostName(), RecordType.getByCode(5));
-            Set<ResourceRecord> cNameCachedResult = cache.getCachedResults(cNameNode);
-
-            if (!cNameCachedResult.isEmpty()){
-                retrieveResultsFromServer(cNameNode, rootServer);
-                getResults(node, indirectionLevel + 1);
-            }
-
             if (!inetAddressStack.isEmpty()) {
             retrieveResultsFromServer(node, inetAddressStack.pop());
-            getResults(node, indirectionLevel);
+                if (!error){
+                    getResults(node, indirectionLevel);
+                }
             }
         }
-
         return cache.getCachedResults(node);
     }
-
-    // private static void getResultsHelper(DNSNode node, int indirectionLevel){
-
-    // retrieveResultsFromServer(node, stack.push());
-    // getResults(node, indirectionLevel++);
-    // }
 
     /**
      * Retrieves DNS results from a specified DNS server. Queries are sent in
@@ -227,8 +232,6 @@ public class DNSLookupService {
      * @param server Address of the server to be used for the query.
      */
     private static void retrieveResultsFromServer(DNSNode node, InetAddress server) {
-        // TODO To be completed by the student
-
         byte[] queryBuffer = createQuery(node);
 
         DatagramPacket queryPacket = new DatagramPacket(queryBuffer, queryBuffer.length, server, DEFAULT_DNS_PORT);
@@ -253,7 +256,7 @@ public class DNSLookupService {
                 }
             } catch (Exception e){
                 System.out.println(e);
-                return;
+                error = true;
             }
         } catch (IOException e) {
             System.out.println(e);
@@ -270,7 +273,6 @@ public class DNSLookupService {
 
     private static ArrayList<ResourceRecord> decodeResponse(byte[] responseBuffer, DNSNode node) throws Exception {
         ArrayList<ResourceRecord> results = new ArrayList<ResourceRecord>();
-
         int responseID = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, 0, 2));
         int QR = (responseBuffer[2] & 0x80) >>> 7;
         int opCode = (responseBuffer[2] & 0x78) >>> 3;
@@ -294,13 +296,10 @@ public class DNSLookupService {
                 throw new Exception("Format error - The name server was unable to interpret the query");
             case 2:
                 throw new Exception("Server failure - The name server was unable to process this query due to a problem with the name server");
-            
             case 3:
                 throw new Exception("Name Error - Meaningful only for responses from an authoritative name server, this code signifies that the domain name referenced in the query does not exist");
-                
             case 4:
                 throw new Exception("Not Implemented -The name server does not support the requested kind of query");
-                
             case 5:
                 throw new Exception("Refused - The name server refuses to perform the specified operation for policy reasons");
             case 0:
@@ -332,15 +331,13 @@ public class DNSLookupService {
                         ptr = (int) temp.get("ptr");
                         results.add(record);
                         cache.addResult(record);
-                        // if(record.getType() == RecordType.getByCode(5)){
-                        //     DNSNode cNameNode = new DNSNode(record.getHostName(), node.getType());
-                        //     Set<ResourceRecord> cnameset = getResults(cNameNode, 0);
-                        //     results.addAll(cnameset);
-                        // }
                     }
                     System.out.println("Entered AA==1");
-                    
+                    if (results.isEmpty()) {
+                        throw new Exception("No Answer");
+                    } else {
                     return results;
+                    }
                 }
 
                 // Pointer now pointing at first nameserver
@@ -378,7 +375,7 @@ public class DNSLookupService {
 
                 if (resourceRecords.isEmpty() && !listOfNameServers.isEmpty()){
                     ResourceRecord firstRecord = listOfNameServers.get(0);
-                    DNSNode sideNode = new DNSNode(firstRecord.getHostName(), RecordType.getByCode(1));
+                    DNSNode sideNode = new DNSNode(firstRecord.getTextResult(), RecordType.getByCode(1));
                     Set<ResourceRecord> sideNodeResourceRecords = getResults(sideNode, -1);
                     for(ResourceRecord r: sideNodeResourceRecords) {
                         resourceRecords.add(r);
@@ -387,7 +384,6 @@ public class DNSLookupService {
 
                     return resourceRecords;
                 }
-
                 return new ArrayList<ResourceRecord>();
     }
 
@@ -456,7 +452,7 @@ public class DNSLookupService {
         // Get the new pointer pointing to the correct offset stated by the compression
         // bits
         while (partlength >= 192) {
-            int newptr = ((partlength - 192) << 8) + responseBuffer[ptr + 1] & 0xFF;
+            int newptr = ((partlength - 192) << 8) | responseBuffer[ptr + 1] & 0xFF;
             partlength = responseBuffer[newptr];
             tempptr = newptr;
         }
@@ -466,7 +462,7 @@ public class DNSLookupService {
             if (labellength >= 192) {
                 int newptr = 0;
                 while (labellength >= 192) {
-                    newptr = ((labellength - 192) << 8) + responseBuffer[tempptr + 1] & 0xFF;
+                    newptr = ((labellength - 192) << 8) | responseBuffer[tempptr + 1] & 0xFF;
                     labellength = responseBuffer[newptr];
                 }
                 name = name + getNameHelper(responseBuffer, newptr);
@@ -502,7 +498,7 @@ public class DNSLookupService {
         while (responseBuffer[ptr] != 0) {
             int partlength = responseBuffer[ptr] & 0xFF;
             if (partlength >= 192) {
-                int newptr = ((partlength - 192) << 8) + responseBuffer[ptr + 1] & 0xFF;
+                int newptr = ((partlength - 192) << 8) | responseBuffer[ptr + 1] & 0xFF;
                 hostName = hostName + getNameHelper(responseBuffer, newptr);
                 break;
             }
