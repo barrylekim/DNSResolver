@@ -3,6 +3,7 @@ package ca.ubc.cs.cs317.dnslookup;
 import java.io.Console;
 import java.io.IOException;
 import java.util.*;
+import java.net.*;
 import java.net.DatagramSocket;
 import java.net.DatagramPacket;
 import java.net.InetAddress;
@@ -236,9 +237,17 @@ public class DNSLookupService {
             System.out.println("");
             System.out.println("Query ID     " + questionID + " " + node.getHostName() + "  " + node.getType() + " --> " + server.getHostAddress());
             }
-        } catch (IOException e) {
-            System.out.println(e);
-        }
+        }  catch (SocketTimeoutException e) {
+            try {
+                socket.send(queryPacket);
+                } catch (SocketTimeoutException timeoutException) {
+                    return;
+                } catch (IOException ioException){
+                    System.out.println(e);
+                }
+            } catch (IOException e) {
+                    System.out.println(e);
+                }
 
         // TODO receive the query and then decode it
         byte[] response = new byte[1024];
