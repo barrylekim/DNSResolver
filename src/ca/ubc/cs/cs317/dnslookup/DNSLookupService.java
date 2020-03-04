@@ -232,28 +232,16 @@ public class DNSLookupService {
         DatagramPacket queryPacket = new DatagramPacket(query, query.length, server, DEFAULT_DNS_PORT);
         try {
             socket.send(queryPacket);
-            if(verboseTracing){
-            System.out.println("");
-            System.out.println("");
-            System.out.println("Query ID     " + questionID + " " + node.getHostName() + "  " + node.getType() + " --> " + server.getHostAddress());
+            if (verboseTracing){
+                System.out.println("");
+                System.out.println("");
+                System.out.println("Query ID     " + questionID + " " + node.getHostName() + "  " + node.getType() + " --> " + server.getHostAddress());
             }
-        }  catch (SocketTimeoutException e) {
-            try {
-                socket.send(queryPacket);
-                } catch (SocketTimeoutException timeoutException) {
-                    return;
-                } catch (IOException ioException){
-                    System.out.println(e);
-                }
-            } catch (IOException e) {
-                    System.out.println(e);
-                }
 
         // TODO receive the query and then decode it
         byte[] response = new byte[1024];
         DatagramPacket responsePacket = new DatagramPacket(response, response.length);
 
-        try {
             socket.receive(responsePacket);
             int responseID = getIntFromByteArray(Arrays.copyOfRange(response, 0, 2));
             int QR = (response[2] & 0x80) >>> 7; // get 1st bit
@@ -275,10 +263,23 @@ public class DNSLookupService {
             } catch (Exception e){
                 System.out.println(e);
                 error = true;
+                }
+            } catch (SocketTimeoutException e) {
+                try {
+                    socket.send(queryPacket);
+                    if (verboseTracing){
+                        System.out.println("");
+                        System.out.println("");
+                        System.out.println("Query ID     " + questionID + " " + node.getHostName() + "  " + node.getType() + " --> " + server.getHostAddress());
+                        }
+                    } catch (SocketTimeoutException timeoutException) {
+                        return;
+                    } catch (IOException ioException){
+                        System.out.println(e);
+                    }
+            } catch (IOException e) {
+                    System.out.println(e);
             }
-        } catch (IOException e) {
-            System.out.println(e);
-        }
     }
 
     /**
