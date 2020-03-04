@@ -249,7 +249,7 @@ public class DNSLookupService {
             try {
                 ArrayList<ResourceRecord> additionalRecords = decodeResponse(responseBuffer, node);
                 for (ResourceRecord a : additionalRecords) {
-                    if (a.getNode().getType() == node.getType()) {
+                    if (a.getNode().getType() == RecordType.getByCode(1)) {
                         inetAddressStack.push(a.getInetResult());
                         break;
                     }
@@ -332,10 +332,6 @@ public class DNSLookupService {
                         results.add(record);
                         cache.addResult(record);
                     }
-                    System.out.println("Entered AA==1");
-                    if (results.isEmpty()) {
-                        throw new Exception("No Answer");
-                    } else {
                     return results;
                     }
                 }
@@ -359,7 +355,6 @@ public class DNSLookupService {
                     listOfAdditionalRecords.add(record);
                     cache.addResult(record);
                 }
-
 
                 ArrayList<ResourceRecord> resourceRecords = new ArrayList<ResourceRecord>();
 
