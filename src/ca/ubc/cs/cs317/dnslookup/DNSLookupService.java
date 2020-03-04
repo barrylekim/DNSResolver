@@ -231,9 +231,11 @@ public class DNSLookupService {
         DatagramPacket queryPacket = new DatagramPacket(query, query.length, server, DEFAULT_DNS_PORT);
         try {
             socket.send(queryPacket);
+            if(verboseTracing){
             System.out.println("");
             System.out.println("");
             System.out.println("Query ID     " + questionID + " " + node.getHostName() + "  " + node.getType() + " --> " + server.getHostAddress());
+            }
         } catch (IOException e) {
             System.out.println(e);
         }
