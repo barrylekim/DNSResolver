@@ -10,17 +10,11 @@ import java.net.SocketException;
 import java.net.UnknownHostException;
 
 public class DNSLookupService {
-
-    private static int[] generatedQueryIDs = new int[65536];
-    private static int totalQueryCount = 0;
-
     private static final int DEFAULT_DNS_PORT = 53;
     private static final int MAX_INDIRECTION_LEVEL = 10;
-
     private static InetAddress rootServer;
     private static boolean verboseTracing = false;
     private static DatagramSocket socket;
-
     private static DNSCache cache = DNSCache.getInstance();
     private static Set<Integer> queryIDArray = new HashSet<>();
     private static Stack<InetAddress> inetAddressStack = new Stack<InetAddress>();
@@ -208,13 +202,12 @@ public class DNSLookupService {
             return cache.getCachedResults(node);
         }
 
-
         // System.out.println("Top of stack is: "+inetAddressStack.peek());
         Set<ResourceRecord> cachedResult = cache.getCachedResults(node);
 
         if (cachedResult.isEmpty()) {
             if (!inetAddressStack.isEmpty()) {
-            retrieveResultsFromServer(node, inetAddressStack.pop());
+                retrieveResultsFromServer(node, inetAddressStack.pop());
                 if (!error){
                     getResults(node, indirectionLevel);
                 }
@@ -232,22 +225,36 @@ public class DNSLookupService {
      * @param server Address of the server to be used for the query.
      */
     private static void retrieveResultsFromServer(DNSNode node, InetAddress server) {
-        byte[] queryBuffer = createQuery(node);
+        byte[] query = createQuery(node);
+        int questionID = getIntFromByteArray(Arrays.copyOfRange(query, 0, 2));
 
-        DatagramPacket queryPacket = new DatagramPacket(queryBuffer, queryBuffer.length, server, DEFAULT_DNS_PORT);
+        DatagramPacket queryPacket = new DatagramPacket(query, query.length, server, DEFAULT_DNS_PORT);
         try {
             socket.send(queryPacket);
+            System.out.println("");
+            System.out.println("");
+            System.out.println("Query ID     " + questionID + " " + node.getHostName() + "  " + node.getType() + " --> " + server.getHostAddress());
         } catch (IOException e) {
             System.out.println(e);
         }
 
         // TODO receive the query and then decode it
-        byte[] responseBuffer = new byte[1024];
-        DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
+        byte[] response = new byte[1024];
+        DatagramPacket responsePacket = new DatagramPacket(response, response.length);
+
         try {
             socket.receive(responsePacket);
+            int responseID = getIntFromByteArray(Arrays.copyOfRange(response, 0, 2));
+            int QR = (response[2] & 0x80) >>> 7; // get 1st bit
+
+            while (questionID != responseID || QR != 1) {
+                socket.receive(responsePacket);
+                responseID = getIntFromByteArray(Arrays.copyOfRange(response, 0, 2));
+                QR = (response[2] & 0x80) >>> 7; // get 1st bit
+            }
+
             try {
-                ArrayList<ResourceRecord> additionalRecords = decodeResponse(responseBuffer, node);
+                ArrayList<ResourceRecord> additionalRecords = decodeResponse(response, node);
                 for (ResourceRecord a : additionalRecords) {
                     if (a.getNode().getType() == RecordType.getByCode(1)) {
                         inetAddressStack.push(a.getInetResult());
@@ -263,6 +270,10 @@ public class DNSLookupService {
         }
     }
 
+    /**
+     * Returns an int represented from the Byte Array
+     * @return int
+     */
     private static int getIntFromByteArray(byte[] b) {
         if (b.length == 2) {
             return ((b[0] & 0xFF) << 8) + (b[1] & 0xFF);
@@ -271,6 +282,13 @@ public class DNSLookupService {
         }
     }
 
+    /**
+     * Given a Response Byte Array decode Answers, Nameservers and Additional Records
+     * @param responseBuffer    The Response Byte Array
+     * @param DNSNode           THe Node used to query the Response
+     * 
+     * @return ArrayList<ResourceRecord>    Returns a list of Answer/Additional Records from Response
+     */
     private static ArrayList<ResourceRecord> decodeResponse(byte[] responseBuffer, DNSNode node) throws Exception {
         ArrayList<ResourceRecord> results = new ArrayList<ResourceRecord>();
         int responseID = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, 0, 2));
@@ -287,6 +305,10 @@ public class DNSLookupService {
         int ANCOUNT = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, 6, 8));
         int NSCOUNT = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, 8, 10));
         int ARCOUNT = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, 10, 12));
+
+        if (verboseTracing){
+            System.out.println("Response ID: " + responseID + " " + "Authoritative" + " = " + (AA==1));
+        }
 
         String hostName = "";
         int ptr = 12;
@@ -317,10 +339,13 @@ public class DNSLookupService {
 
                 hostName = hostName.substring(0, hostName.length() - 1); // Get rid of the redundant "." at the end
 
-
                 ptr++;
                 int QTYPE = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, ptr, ptr += 2));
                 int QCLASS = getIntFromByteArray(Arrays.copyOfRange(responseBuffer, ptr, ptr += 2));
+
+                if(verboseTracing){
+                System.out.println("  Answers " + "(" + ANCOUNT+ ")");
+                }
 
                 // Need to decode Answer if there is one
                 if (AA == 1) {
@@ -329,13 +354,18 @@ public class DNSLookupService {
                         HashMap<String, Object> temp = decodeRecord(responseBuffer, ptr);
                         ResourceRecord record = (ResourceRecord) temp.get("record");
                         ptr = (int) temp.get("ptr");
+                        if (verboseTracing){
+                            verbosePrintResourceRecord(record, record.getType().getCode());
+                        }
                         results.add(record);
                         cache.addResult(record);
                     }
                     return results;
                     }
-                }
 
+                if (verboseTracing){
+                        System.out.println("  Nameservers " + "(" + NSCOUNT+ ")");
+                    }
                 // Pointer now pointing at first nameserver
                 ArrayList<ResourceRecord> listOfNameServers = new ArrayList<ResourceRecord>();
                 // Name server
@@ -343,8 +373,15 @@ public class DNSLookupService {
                     HashMap<String, Object> temp = decodeRecord(responseBuffer, ptr);
                     ResourceRecord record = (ResourceRecord) temp.get("record");
                     ptr = (int) temp.get("ptr");
+                    if (verboseTracing){
+                        verbosePrintResourceRecord(record, record.getType().getCode());
+                    }
                     listOfNameServers.add(record);
                 }
+
+                if(verboseTracing){
+                    System.out.println("  Additional Information " + "(" + ARCOUNT+ ")");
+                    }
 
                 ArrayList<ResourceRecord> listOfAdditionalRecords = new ArrayList<ResourceRecord>();
                 // Additional records
@@ -352,6 +389,9 @@ public class DNSLookupService {
                     HashMap<String, Object> temp = decodeRecord(responseBuffer, ptr);
                     ResourceRecord record = (ResourceRecord) temp.get("record");
                     ptr = (int) temp.get("ptr");
+                    if (verboseTracing){
+                        verbosePrintResourceRecord(record, record.getType().getCode());
+                    }
                     listOfAdditionalRecords.add(record);
                     cache.addResult(record);
                 }
@@ -382,6 +422,13 @@ public class DNSLookupService {
                 return new ArrayList<ResourceRecord>();
     }
 
+    /**
+     * Helper to decode a Single Answer/Name Server/Additinoal Record from responseByte
+     * @param responseBuffer    The Response Byte Array
+     * @param ptr               Pointer to denote where to start in the Response Array
+     * 
+     * @return HashMap<String, Object>    Returns a ResourceRecord and an updated pointer
+     */
     private static HashMap<String, Object> decodeRecord(byte[] responseBuffer, int ptr) {
         HashMap<String, Object> result = new HashMap<String, Object>();
         ResourceRecord singleRecord = null;
@@ -438,6 +485,13 @@ public class DNSLookupService {
         return result;
     }
 
+    /**
+     * Helper to decode to get the name from a Byte Array
+     * @param responseBuffer    The Response Byte Array
+     * @param ptr               Pointer to denote where to start in the Response Array
+     * 
+     * @return HashMap<String, Object>    Returns the Name and an updated pointer
+     */
     private static HashMap<String, Object> getName(byte[] responseBuffer, int ptr) {
         HashMap<String, Object> result = new HashMap<String, Object>();
         String name = "";
@@ -488,6 +542,13 @@ public class DNSLookupService {
         return result;
     }
 
+    /**
+     * Recurisve Helper for Name to return Name
+     * @param responseBuffer    The Response Byte Array
+     * @param ptr               Pointer to denote where to start in the Response Array
+     * 
+     * @return String           Returns the Name 
+     */
     private static String getNameHelper(byte[] responseBuffer, int ptr) {
         String hostName = "";
         while (responseBuffer[ptr] != 0) {
@@ -546,6 +607,12 @@ public class DNSLookupService {
         return -1;
     }
 
+    /**
+     * Encodes a Query to be used to send out a Question to the DNS Server
+     * 
+     * @param node          node contains the information of the question
+     * @return byte[]       Returns a byte Array that has been encoded
+     */
     private static byte[] createQuery(DNSNode node) {
         byte[] query = new byte[512];
         int id = randomIDGenerator();
