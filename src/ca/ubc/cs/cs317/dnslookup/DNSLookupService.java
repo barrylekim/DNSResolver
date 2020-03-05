@@ -228,19 +228,62 @@ public class DNSLookupService {
     private static void retrieveResultsFromServer(DNSNode node, InetAddress server) {
         byte[] query = createQuery(node);
         int questionID = getIntFromByteArray(Arrays.copyOfRange(query, 0, 2));
+        byte[] response = new byte[1024];
+        DatagramPacket responsePacket = new DatagramPacket(response, response.length);
 
         DatagramPacket queryPacket = new DatagramPacket(query, query.length, server, DEFAULT_DNS_PORT);
         try {
-            socket.send(queryPacket);
-            if (verboseTracing){
-                System.out.println("");
-                System.out.println("");
-                System.out.println("Query ID     " + questionID + " " + node.getHostName() + "  " + node.getType() + " --> " + server.getHostAddress());
+            retrieveFromServerHelper(queryPacket, responsePacket, questionID, server, response, node);
+        } catch (SocketTimeoutException e) {
+            try {
+                retrieveFromServerHelper(queryPacket, responsePacket, questionID, server, response, node);
+            } catch (SocketTimeoutException timeoutException) {
+                return;
+            } catch (IOException ioException) {
+                System.out.println(e);
+                return;
             }
+        } catch (IOException e) {
+            System.out.println("IOException block");
+            System.out.println(e);
+        }
+        try {
+            ArrayList<ResourceRecord> additionalRecords = decodeResponse(response, node);
+            for (ResourceRecord a : additionalRecords) {
+                if (a.getNode().getType() == RecordType.getByCode(1)) {
+                    inetAddressStack.push(a.getInetResult());
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            System.out.println(e);
+            error = true;
+        }
+    }
 
-        // TODO receive the query and then decode it
-        byte[] response = new byte[1024];
-        DatagramPacket responsePacket = new DatagramPacket(response, response.length);
+    /**
+     * Helper to handle connecting to the server. 
+     * Used to handle and throw SocketTimeoutExceptions & IOExceptions
+     *
+     * @param queryPacket   Datagram Packet used to Send
+     * @param responsePacket   Dategram Packet used to Receive 
+     * @param questionID   ID of the queryPacket
+     * @param server       Sever to send queryPacket
+     * @param response     Response Byte Array from responsePacket
+     * @param node          Node used to query
+     * 
+     * @throws SocketTimeoutException
+     * @throws IOException
+     */
+    private static void retrieveFromServerHelper(DatagramPacket queryPacket, DatagramPacket responsePacket, int questionID, InetAddress server, byte[] response, DNSNode node) throws SocketTimeoutException, IOException{
+        try {
+            socket.send(queryPacket);
+            if (verboseTracing) {
+                System.out.println("");
+                System.out.println("");
+                System.out.println("Query ID     " + questionID + " " + node.getHostName() + "  " + node.getType()
+                        + " --> " + server.getHostAddress());
+            }
 
             socket.receive(responsePacket);
             int responseID = getIntFromByteArray(Arrays.copyOfRange(response, 0, 2));
@@ -251,35 +294,9 @@ public class DNSLookupService {
                 responseID = getIntFromByteArray(Arrays.copyOfRange(response, 0, 2));
                 QR = (response[2] & 0x80) >>> 7; // get 1st bit
             }
-
-            try {
-                ArrayList<ResourceRecord> additionalRecords = decodeResponse(response, node);
-                for (ResourceRecord a : additionalRecords) {
-                    if (a.getNode().getType() == RecordType.getByCode(1)) {
-                        inetAddressStack.push(a.getInetResult());
-                        break;
-                    }
-                }
-            } catch (Exception e){
-                System.out.println(e);
-                error = true;
-                }
-            } catch (SocketTimeoutException e) {
-                try {
-                    socket.send(queryPacket);
-                    if (verboseTracing){
-                        System.out.println("");
-                        System.out.println("");
-                        System.out.println("Query ID     " + questionID + " " + node.getHostName() + "  " + node.getType() + " --> " + server.getHostAddress());
-                        }
-                    } catch (SocketTimeoutException timeoutException) {
-                        return;
-                    } catch (IOException ioException){
-                        System.out.println(e);
-                    }
-            } catch (IOException e) {
-                    System.out.println(e);
-            }
+        } catch (Exception e){
+            throw e;
+        }
     }
 
     /**
