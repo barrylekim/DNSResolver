@@ -1,4 +1,4 @@
-Total before late penalty: [/63]
+Total before late penalty: [62/63]
 
 NOTE: in the marking report something left blank (e.g.  [ /6]) typically means
 that you received full marks for that item.  There will be a mark deduction of 10 points if, 
@@ -40,7 +40,7 @@ General Functionality: [/40]
 
         (e.g. uncompressed RR names, compression of the query name).
 
-   [/3] Adds all resource records in the additional section to the cache.
+   [0/3] Adds all resource records in the additional section to the cache.
 
    [/2] Uses cached data when available (for a regular query).
 
